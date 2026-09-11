@@ -1,3 +1,6 @@
+> TODO:
+> - 更新Tool Call模板版本，将GLM, Deepseek, Qwen模型改用适配模型的模板，以尝试获得更好的反代效果
+
 # GenAI2OpenAI
 
 GenAI2OpenAI 把上海科技大学 GenAI 网页服务转换为 OpenAI Chat Completions、
