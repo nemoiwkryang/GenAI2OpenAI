@@ -1,6 +1,3 @@
-> TODO:
-> - 更新Tool Call模板版本，将GLM, Deepseek, Qwen模型改用适配模型的模板，以尝试获得更好的反代效果
-
 # GenAI2OpenAI
 
 GenAI2OpenAI 把上海科技大学 GenAI 网页服务转换为 OpenAI Chat Completions、
@@ -11,15 +8,18 @@ tool calling、推理增量、视觉输入、token 计数、上游重试和模�
 
 | GenAI 模型 ID | 实际模型 | 视觉 | Tool calling |
 | --- | --- | --- | --- |
-| `chatglm` | GLM 5.2 | 否 | 官方 Hugging Face 模板 |
+| `chatglm` | GLM 5.3 Flash | 否 | 内联官方模板 + 纯文本桥（`CALLTOOL`/`RUNCMD`） |
+| `chatglm`（旧） | GLM 5.2 | 否 | 官方 Hugging Face 模板 |
 | `deepseek-chat` | DeepSeek V4 Flash | 否 | 官方 `encoding_dsv4.py` |
-| `deepseek-pro` | DeepSeek V4 Pro | 否 | 官方 `encoding_dsv4.py` |
-| `qwen-instruct` | Qwen 3.5 | 是 | 官方 Hugging Face 模板 |
+| `deepseek-pro` | DeepSeek V4.1（552B） | 否 | 内联官方 `encoding.py` + 纯文本桥 |
+| `qwen-instruct` | Qwen 3.8 | 是 | 内联官方模板 + 纯文本桥 |
 | `kimi-k3` | Kimi K3 | 是 | GenAI 通道专用桥接协议 |
 
-Kimi K3 的桥接协议不是 Moonshot 官方工具格式。普通消息和 token 计数仍使用固定
-revision 的官方 `encoding_k3.py`；项目只在 GenAI 通道无法透传原生工具声明时使用
-自定义桥接。聊天请求不会发送 `chatGroupId`。
+模型目录记录里的名称带版本号（如 `GLM-5.3-Flash`、`DeepSeek-V4.1`），代理据此把
+`chatglm` / `qwen-instruct` / `deepseek-pro` 路由到新版本 adapter；旧版本记录仍走原
+adapter。Kimi K3 与三个新版本都使用"平台不识别的纯文本协议"传递工具调用，因为
+GenAI 通道会剥离各家原生工具语法。普通消息和 token 计数仍使用（内联或固定 revision
+的）官方模板/编码器。聊天请求不会发送 `chatGroupId`。
 
 ## 快速开始
 

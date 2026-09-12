@@ -7,7 +7,9 @@ from genai_proxy.models.deepseek_v4.codec import (
     DEEPSEEK_V4_FLASH_SPEC,
     DEEPSEEK_V4_PRO_SPEC,
 )
+from genai_proxy.models.deepseek_v41.codec import DEEPSEEK_V4_1_SPEC
 from genai_proxy.models.glm52.codec import GLM_5_2_SPEC
+from genai_proxy.models.glm53.codec import GLM_5_3_SPEC
 from genai_proxy.models.hf_assets import (
     Artifact,
     TokenizerSpec,
@@ -19,12 +21,16 @@ from genai_proxy.models.hf_assets import (
 )
 from genai_proxy.models.kimi_k3.codec import KIMI_K3_SPEC, build_tokenizer
 from genai_proxy.models.qwen35.codec import QWEN_3_5_SPEC
+from genai_proxy.models.qwen38.codec import QWEN_3_8_SPEC
 
 ACTIVE_TOKENIZER_SPECS = (
     GLM_5_2_SPEC,
+    GLM_5_3_SPEC,
     DEEPSEEK_V4_FLASH_SPEC,
     DEEPSEEK_V4_PRO_SPEC,
+    DEEPSEEK_V4_1_SPEC,
     QWEN_3_5_SPEC,
+    QWEN_3_8_SPEC,
     KIMI_K3_SPEC,
 )
 
@@ -74,7 +80,7 @@ def verify_active_assets(
 def _validate_spec(spec: TokenizerSpec) -> None:
     factory = build_tokenizer if spec.family == KIMI_K3_SPEC.family else None
     load_tokenizer(spec, factory=factory)
-    if spec.template is not None:
+    if spec.template is not None or spec.template_source is not None:
         load_template(spec)
     if spec.encoder is not None:
         load_python_encoder(spec)

@@ -16,18 +16,24 @@ from urllib3.exceptions import HTTPError
 from genai_proxy.errors import ProxyError
 from genai_proxy.models import hf_assets as _hf_assets
 from genai_proxy.models.deepseek_v4 import codec as _deepseek_codec
+from genai_proxy.models.deepseek_v41 import codec as _deepseek_v41_codec
 from genai_proxy.models.glm52 import codec as _glm_codec
+from genai_proxy.models.glm53 import codec as _glm53_codec
 from genai_proxy.models.kimi_k3 import codec as _kimi_codec
 from genai_proxy.models.legacy import minimax_codec as _minimax_codec
 from genai_proxy.models.qwen35 import codec as _qwen_codec
+from genai_proxy.models.qwen38 import codec as _qwen38_codec
 from genai_proxy.models.registry import (
+    DEEPSEEK_V4_1_ADAPTER,
     DEEPSEEK_V4_FLASH_ADAPTER,
     DEEPSEEK_V4_PRO_ADAPTER,
     GLM_5_1_ADAPTER,
     GLM_5_2_ADAPTER,
+    GLM_5_3_ADAPTER,
     KIMI_K3_ADAPTER,
     MINIMAX_ADAPTER,
     QWEN_3_5_ADAPTER,
+    QWEN_3_8_ADAPTER,
 )
 
 # Keep the token_usage facade stable while implementations live with their
@@ -39,10 +45,19 @@ _deepseek_tool_prompt = _deepseek_codec.official_tool_prompt
 _deepseek_transport_messages = _deepseek_codec.official_transport_messages
 _serialize_deepseek_completion = _deepseek_codec.serialize_completion
 
+DEEPSEEK_V4_1_SPEC = _deepseek_v41_codec.DEEPSEEK_V4_1_SPEC
+_deepseek_v41_encode_prompt = _deepseek_v41_codec.encode_prompt
+_deepseek_v41_reasoning_prefix = _deepseek_v41_codec.official_reasoning_prefix
+_deepseek_v41_tool_prompt = _deepseek_v41_codec.official_tool_prompt
+_deepseek_v41_transport_messages = _deepseek_v41_codec.official_transport_messages
+_serialize_deepseek_v41_completion = _deepseek_v41_codec.serialize_completion
+
 GLM_5_1_SPEC = _glm_codec.GLM_5_1_SPEC
 GLM_5_2_SPEC = _glm_codec.GLM_5_2_SPEC
 _glm_tool_prompt = _glm_codec.official_tool_prompt
 _serialize_glm_completion = _glm_codec.serialize_completion
+
+GLM_5_3_SPEC = _glm53_codec.GLM_5_3_SPEC
 
 HF_BASE_URL = _hf_assets.HF_BASE_URL
 TOKENIZER_CACHE_ENV = _hf_assets.TOKENIZER_CACHE_ENV
@@ -82,6 +97,9 @@ _qwen_codec_image_token_count = _qwen_codec.image_token_count
 _qwen_tool_prompt = _qwen_codec.official_tool_prompt
 _serialize_qwen_completion = _qwen_codec.serialize_completion
 
+QWEN_3_8_SPEC = _qwen38_codec.QWEN_3_8_SPEC
+_qwen38_tool_prompt = _qwen38_codec.official_tool_prompt
+
 KIMI_IMAGE_MAX_BYTES = 50 * 1024 * 1024
 KIMI_IMAGE_MAX_REDIRECTS = 5
 # Common fake-IP range used by transparent DNS proxies such as Mihomo.
@@ -94,9 +112,12 @@ SPECS = MappingProxyType(
         for spec in (
             GLM_5_1_SPEC,
             GLM_5_2_SPEC,
+            GLM_5_3_SPEC,
             DEEPSEEK_V4_PRO_SPEC,
             DEEPSEEK_V4_FLASH_SPEC,
+            DEEPSEEK_V4_1_SPEC,
             QWEN_3_5_SPEC,
+            QWEN_3_8_SPEC,
             MINIMAX_M2_7_SPEC,
             KIMI_K3_SPEC,
         )
@@ -113,22 +134,32 @@ def tokenizer_family_for_model(
         return GLM_5_1_SPEC.family
     if tool_adapter == GLM_5_2_ADAPTER:
         return GLM_5_2_SPEC.family
+    if tool_adapter == GLM_5_3_ADAPTER:
+        return GLM_5_3_SPEC.family
     if tool_adapter == DEEPSEEK_V4_PRO_ADAPTER:
         return DEEPSEEK_V4_PRO_SPEC.family
     if tool_adapter == DEEPSEEK_V4_FLASH_ADAPTER:
         return DEEPSEEK_V4_FLASH_SPEC.family
+    if tool_adapter == DEEPSEEK_V4_1_ADAPTER:
+        return DEEPSEEK_V4_1_SPEC.family
     if tool_adapter == KIMI_K3_ADAPTER:
         return KIMI_K3_SPEC.family
     if tool_adapter == QWEN_3_5_ADAPTER:
         return QWEN_3_5_SPEC.family
+    if tool_adapter == QWEN_3_8_ADAPTER:
+        return QWEN_3_8_SPEC.family
     if tool_adapter == MINIMAX_ADAPTER:
         return MINIMAX_M2_7_SPEC.family
 
     text = _model_text(model, model_record)
     if _contains_kimi_k3_version(text):
         return KIMI_K3_SPEC.family
+    if _contains_version(text, "qwen", "3", "8"):
+        return QWEN_3_8_SPEC.family
     if _contains_version(text, "qwen", "3", "5"):
         return QWEN_3_5_SPEC.family
+    if _contains_version(text, "glm", "5", "3"):
+        return GLM_5_3_SPEC.family
     if _contains_version(text, "glm", "5", "2"):
         return GLM_5_2_SPEC.family
     if _contains_version(text, "glm", "5", "1"):
@@ -139,6 +170,8 @@ def tokenizer_family_for_model(
         or _contains_version(text, "minimax", "2", "7")
     ):
         return MINIMAX_M2_7_SPEC.family
+    if _contains_version(text, "deepseek", "4", "1"):
+        return DEEPSEEK_V4_1_SPEC.family
     if "deepseek-pro" in text or "deepseek v4 pro" in text or "deepseek-v4-pro" in text:
         return DEEPSEEK_V4_PRO_SPEC.family
     if (
@@ -169,12 +202,18 @@ def official_tool_prompt_for_adapter(
             else DEEPSEEK_V4_FLASH_SPEC
         )
         return _deepseek_tool_prompt(spec, function_tools)
+    if adapter == DEEPSEEK_V4_1_ADAPTER:
+        return _deepseek_v41_tool_prompt(DEEPSEEK_V4_1_SPEC, function_tools)
     if adapter == GLM_5_1_ADAPTER:
         return _glm_tool_prompt(GLM_5_1_SPEC, function_tools)
     if adapter == GLM_5_2_ADAPTER:
         return _glm_tool_prompt(GLM_5_2_SPEC, function_tools)
+    if adapter == GLM_5_3_ADAPTER:
+        return _glm_tool_prompt(GLM_5_3_SPEC, function_tools)
     if adapter == QWEN_3_5_ADAPTER:
         return _qwen_tool_prompt(function_tools)
+    if adapter == QWEN_3_8_ADAPTER:
+        return _qwen38_tool_prompt(function_tools)
     if adapter == MINIMAX_ADAPTER:
         return _minimax_tool_prompt(function_tools)
     return None
@@ -190,6 +229,8 @@ def official_reasoning_prefix_for_adapter(
     adapter: str | None,
     effort: str | None,
 ) -> str:
+    if adapter == DEEPSEEK_V4_1_ADAPTER:
+        return _deepseek_v41_reasoning_prefix(DEEPSEEK_V4_1_SPEC, effort)
     if effort != "max" or adapter not in (
         DEEPSEEK_V4_FLASH_ADAPTER,
         DEEPSEEK_V4_PRO_ADAPTER,
@@ -211,6 +252,14 @@ def official_deepseek_transport_messages(
     reasoning_config: dict | None = None,
     tool_choice_suffix: str = "",
 ) -> list[dict]:
+    if adapter == DEEPSEEK_V4_1_ADAPTER:
+        return _deepseek_v41_transport_messages(
+            DEEPSEEK_V4_1_SPEC,
+            messages,
+            tools,
+            reasoning_config=reasoning_config,
+            tool_choice_suffix=tool_choice_suffix,
+        )
     if adapter not in (DEEPSEEK_V4_FLASH_ADAPTER, DEEPSEEK_V4_PRO_ADAPTER):
         raise ValueError("DeepSeek V4 transport requires a V4 adapter")
 
@@ -389,6 +438,13 @@ def render_chat_prompt(
         parse_tool_arguments=spec.encoder is None,
     )
 
+    if family == DEEPSEEK_V4_1_SPEC.family:
+        return _deepseek_v41_encode_prompt(
+            normalized_messages,
+            thinking=thinking,
+            reasoning_config=reasoning_config,
+        )
+
     if spec.encoder is not None:
         encode_messages = _load_python_encoder(spec)["encode_messages"]
         effort = (reasoning_config or {}).get("effort")
@@ -412,7 +468,10 @@ def render_chat_prompt(
         "clear_thinking": True,
         "add_vision_id": False,
     }
-    if effort:
+    # Qwen 3.8's template accepts only xhigh/medium/low and raises otherwise;
+    # the upstream bridge never forwards an effort, so the template default
+    # (xhigh) is the faithful rendering.
+    if effort and family != QWEN_3_8_SPEC.family:
         context["reasoning_effort"] = effort
     return template.render(**context)
 
@@ -470,7 +529,7 @@ def _count_chat_prompt(
             thinking=thinking,
         )
         count = _count_encoded(family, prompt)
-        if family == QWEN_3_5_SPEC.family:
+        if family in (QWEN_3_5_SPEC.family, QWEN_3_8_SPEC.family):
             if image_sizes is None:
                 image_sizes = qwen_image_sizes_for_messages(messages)
             count += sum(
@@ -938,7 +997,16 @@ def _serialized_completion(
 
     if finish_reason == "length" and not content and not tool_calls:
         return (
-            str(reasoning).strip() if family == QWEN_3_5_SPEC.family else str(reasoning)
+            str(reasoning).strip()
+            if family in (QWEN_3_5_SPEC.family, QWEN_3_8_SPEC.family)
+            else str(reasoning)
+        )
+
+    if family == DEEPSEEK_V4_1_SPEC.family:
+        return _serialize_deepseek_v41_completion(
+            message,
+            finish_reason=finish_reason,
+            thinking=thinking,
         )
 
     if family.startswith("deepseek_v4"):
@@ -948,7 +1016,7 @@ def _serialized_completion(
             thinking=thinking,
         )
 
-    if family in (GLM_5_1_SPEC.family, GLM_5_2_SPEC.family):
+    if family in (GLM_5_1_SPEC.family, GLM_5_2_SPEC.family, GLM_5_3_SPEC.family):
         return _serialize_glm_completion(message)
 
     if family == MINIMAX_M2_7_SPEC.family:

@@ -3,17 +3,37 @@ import re
 DEEPSEEK_LEGACY_ADAPTER = "deepseek_legacy"
 DEEPSEEK_V4_FLASH_ADAPTER = "deepseek_v4_flash"
 DEEPSEEK_V4_PRO_ADAPTER = "deepseek_v4_pro"
+DEEPSEEK_V4_1_ADAPTER = "deepseek_v4_1"
 DEEPSEEK_ADAPTER = DEEPSEEK_LEGACY_ADAPTER
-DEEPSEEK_V4_ADAPTERS = (DEEPSEEK_V4_FLASH_ADAPTER, DEEPSEEK_V4_PRO_ADAPTER)
+DEEPSEEK_V4_ADAPTERS = (
+    DEEPSEEK_V4_FLASH_ADAPTER,
+    DEEPSEEK_V4_PRO_ADAPTER,
+    DEEPSEEK_V4_1_ADAPTER,
+)
 DEEPSEEK_ADAPTERS = (*DEEPSEEK_V4_ADAPTERS, DEEPSEEK_LEGACY_ADAPTER)
 GENERIC_ADAPTER = "generic"
 GLM_5_1_ADAPTER = "glm_5_1"
 GLM_5_2_ADAPTER = "glm_5_2"
+GLM_5_3_ADAPTER = "glm_5_3"
 GLM_ADAPTER = GLM_5_1_ADAPTER
-GLM_ADAPTERS = (GLM_5_1_ADAPTER, GLM_5_2_ADAPTER)
+GLM_ADAPTERS = (GLM_5_1_ADAPTER, GLM_5_2_ADAPTER, GLM_5_3_ADAPTER)
 KIMI_K3_ADAPTER = "kimi_k3"
 MINIMAX_ADAPTER = "minimax"
 QWEN_3_5_ADAPTER = "qwen_3_5"
+QWEN_3_8_ADAPTER = "qwen_3_8"
+
+# The GenAI platform strips native tool-call syntax (GLM/Qwen <tool_call>,
+# DeepSeek DSML) before the model sees it or before the client receives it, so
+# these adapters carry tools through the plain-text CALLTOOL bridge instead.
+BRIDGE_ADAPTERS = (
+    GLM_5_3_ADAPTER,
+    QWEN_3_8_ADAPTER,
+    DEEPSEEK_V4_1_ADAPTER,
+)
+
+
+def is_bridge_adapter(adapter: str | None) -> bool:
+    return adapter in BRIDGE_ADAPTERS
 
 
 def select_tool_adapter(model: str | None, record: dict | None = None) -> str:
@@ -25,16 +45,22 @@ def select_tool_adapter(model: str | None, record: dict | None = None) -> str:
 
     if _has_kimi_k3_version(text):
         return KIMI_K3_ADAPTER
+    if _has_qwen38_version(text):
+        return QWEN_3_8_ADAPTER
     if model_key == "qwen-instruct" or _has_qwen35_version(text):
         return QWEN_3_5_ADAPTER
     if "minimax" in text or "mini max" in text or "m2.7" in text or "m27" in text:
         return MINIMAX_ADAPTER
     if "chatglm" in text or "glm" in text:
+        if _has_glm_version(text, "5.3"):
+            return GLM_5_3_ADAPTER
         if _has_glm_version(text, "5.1"):
             return GLM_5_1_ADAPTER
         if _has_glm_version(text, "5.2"):
             return GLM_5_2_ADAPTER
         return GLM_5_2_ADAPTER
+    if _has_deepseek_v41_version(text):
+        return DEEPSEEK_V4_1_ADAPTER
     if model_key == "deepseek-pro" or "deepseek-v4-pro" in text or "v4-pro" in text:
         return DEEPSEEK_V4_PRO_ADAPTER
     if (
@@ -52,6 +78,10 @@ def select_tool_adapter(model: str | None, record: dict | None = None) -> str:
 def tool_start_tags(adapter: str) -> tuple[str, ...]:
     if adapter == KIMI_K3_ADAPTER:
         return ("<|open|>tools<|sep|>", "<k3_action>")
+    if adapter in BRIDGE_ADAPTERS:
+        return ("CALLTOOL", "RUNCMD")
+    if adapter == DEEPSEEK_V4_1_ADAPTER:
+        return ("<｜DSML｜ calls>", "<｜DSML｜ invoke>", "<tool_call>", "<arg_key>")
     if adapter in DEEPSEEK_V4_ADAPTERS:
         return ("<｜DSML｜tool_calls>", "<tool_call>", "<arg_key>")
     if adapter == DEEPSEEK_LEGACY_ADAPTER:
@@ -60,7 +90,7 @@ def tool_start_tags(adapter: str) -> tuple[str, ...]:
         return ("<minimax:tool_call>", "<tool_call>", "<arg_key>")
     if adapter in GLM_ADAPTERS:
         return ("<tool_call>", "<arg_key>")
-    if adapter == QWEN_3_5_ADAPTER:
+    if adapter in (QWEN_3_5_ADAPTER, QWEN_3_8_ADAPTER):
         return ("<tool_call>", "<function=")
     return ("<tool_call>",)
 
@@ -120,3 +150,11 @@ def _has_kimi_k3_version(text: str) -> bool:
 
 def _has_qwen35_version(text: str) -> bool:
     return bool(re.search(r"qwen[\s_.-]*3(?:[.\s_-]*5)(?!\d)", text))
+
+
+def _has_qwen38_version(text: str) -> bool:
+    return bool(re.search(r"qwen[\s_.-]*3(?:[.\s_-]*8)(?!\d)", text))
+
+
+def _has_deepseek_v41_version(text: str) -> bool:
+    return bool(re.search(r"deepseek[\s_.-]*v?4(?:[.\s_-]*1)(?!\d)", text))

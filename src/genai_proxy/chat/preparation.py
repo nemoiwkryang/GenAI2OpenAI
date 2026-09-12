@@ -13,9 +13,10 @@ from genai_proxy.messages import (
 )
 from genai_proxy.models import (
     DEEPSEEK_V4_ADAPTERS,
-    GLM_5_2_ADAPTER,
+    GLM_ADAPTERS,
     KIMI_K3_ADAPTER,
     KIMI_TOOL_TRANSPORT_ERROR,
+    QWEN_3_8_ADAPTER,
     collect_kimi_completed_actions,
     inject_deepseek_reasoning_prompt,
     inject_glm_reasoning_prompt,
@@ -156,7 +157,7 @@ class ChatPreparationMixin:
             for message in messages
         ):
             messages = inject_kimi_tool_prompt(messages, [], tool_choice="none")
-        elif tool_adapter == GLM_5_2_ADAPTER:
+        elif tool_adapter in GLM_ADAPTERS:
             messages = inject_glm_reasoning_prompt(messages, reasoning_config)
         elif tool_adapter in DEEPSEEK_V4_ADAPTERS:
             messages = inject_deepseek_reasoning_prompt(
@@ -173,9 +174,13 @@ class ChatPreparationMixin:
 
         # The transport carries two-level reasoning as injected message text.
         # Passing it to the template again would count a different prompt.
+        # GLM templates always emit their own default effort line, and Qwen
+        # 3.8's template rejects efforts outside xhigh/medium/low outright.
         token_reasoning_config = (
             None
-            if tool_adapter == GLM_5_2_ADAPTER or tool_adapter in DEEPSEEK_V4_ADAPTERS
+            if tool_adapter in GLM_ADAPTERS
+            or tool_adapter == QWEN_3_8_ADAPTER
+            or tool_adapter in DEEPSEEK_V4_ADAPTERS
             else reasoning_config
         )
         include_usage = bool(
@@ -413,7 +418,9 @@ def _normalize_messages_for_model_template(
     if family not in {
         "glm_5_1",
         "glm_5_2",
+        "glm_5_3",
         "qwen_3_5",
+        "qwen_3_8",
         "minimax_m2_7",
         "kimi_k3",
     }:
@@ -423,7 +430,7 @@ def _normalize_messages_for_model_template(
         {**message, "role": "system"} if message.get("role") == "developer" else message
         for message in messages
     ]
-    if family not in {"qwen_3_5", "minimax_m2_7"}:
+    if family not in {"qwen_3_5", "qwen_3_8", "minimax_m2_7"}:
         return normalized
 
     system_messages = [

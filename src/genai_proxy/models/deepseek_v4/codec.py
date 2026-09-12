@@ -72,8 +72,13 @@ def official_transport_messages(
     *,
     reasoning_config: dict | None = None,
     tool_choice_suffix: str = "",
+    encoder=None,
+    user_prefix_tokens=None,
+    verify: bool = True,
+    model_label: str = "DeepSeek V4",
 ) -> list[dict]:
-    encoder = load_python_encoder(spec)
+    if encoder is None:
+        encoder = load_python_encoder(spec)
     function_tools = [
         tool
         for tool in tools or []
@@ -81,7 +86,7 @@ def official_transport_messages(
     ]
     if not function_tools:
         raise ProxyError(
-            "DeepSeek V4 requires at least one function tool",
+            f"{model_label} requires at least one function tool",
             error_type="invalid_request_error",
             code="unsupported_tool_type",
             status=400,
@@ -121,7 +126,7 @@ def official_transport_messages(
     last_user_index = encoder["find_last_user_index"](processed)
     if last_user_index != len(processed) - 1:
         raise ProxyError(
-            "DeepSeek V4 tool transport requires the final message to be user or tool",
+            f"{model_label} tool transport requires the final message to be user or tool",
             error_type="invalid_request_error",
             code="unsupported_message_sequence",
             status=400,
@@ -134,23 +139,33 @@ def official_transport_messages(
         drop_thinking=False,
         reasoning_effort=reasoning_effort,
     )
-    user_prefix = str(encoder["USER_SP_TOKEN"])
+    user_prefixes = tuple(
+        str(token)
+        for token in (
+            user_prefix_tokens
+            if user_prefix_tokens is not None
+            else (encoder["USER_SP_TOKEN"],)
+        )
+    )
     assistant_suffix = str(encoder["ASSISTANT_SP_TOKEN"]) + str(
         encoder["thinking_start_token"] if thinking else encoder["thinking_end_token"]
     )
     bos = str(encoder["bos_token"])
     if (
         not prompt.startswith(bos)
-        or not rendered_user.startswith(user_prefix)
+        or not rendered_user.startswith(user_prefixes)
         or not rendered_user.endswith(assistant_suffix)
         or not prompt.endswith(rendered_user)
     ):
         raise tokenizer_error(
             spec,
-            "construct official DeepSeek V4 transport",
+            f"construct official {model_label} transport",
             ValueError("official encoder boundaries changed"),
         )
 
+    user_prefix = next(
+        prefix for prefix in user_prefixes if rendered_user.startswith(prefix)
+    )
     prefix = prompt[len(bos) : -len(rendered_user)]
     user_content = rendered_user[
         len(user_prefix) : len(rendered_user) - len(assistant_suffix)
@@ -159,6 +174,10 @@ def official_transport_messages(
         {"role": "system", "content": prefix},
         {"role": "user", "content": user_content},
     ]
+    if not verify:
+        # Vendored encoders cannot drift, and V4.1's default reasoning-effort
+        # prefix would be re-rendered twice by a naive re-encode check.
+        return transported
     verification = encoder["encode_messages"](
         transported,
         thinking_mode=thinking_mode,
@@ -169,7 +188,7 @@ def official_transport_messages(
     if verification != prompt:
         raise tokenizer_error(
             spec,
-            "verify official DeepSeek V4 transport",
+            f"verify official {model_label} transport",
             ValueError("transport rendering differs from official prompt"),
         )
     return transported

@@ -9,14 +9,18 @@ from genai_proxy.models import (
     KIMI_K3_ADAPTER,
     MINIMAX_ADAPTER,
     QWEN_3_5_ADAPTER,
+    QWEN_3_8_ADAPTER,
+    extract_bridge_tool_calls,
     extract_deepseek_tool_calls,
     extract_kimi_tool_calls,
     extract_qwen35_tool_calls,
+    inject_bridge_tool_prompt,
     inject_deepseek_tool_prompt,
     inject_glm_tool_prompt,
     inject_kimi_tool_prompt,
     inject_minimax_tool_prompt,
     inject_qwen35_tool_prompt,
+    is_bridge_adapter,
     is_deepseek_adapter,
     is_deepseek_model,
     select_tool_adapter,
@@ -77,6 +81,14 @@ def inject_tool_prompt(
     reasoning_config=None,
 ):
     resolved_adapter = adapter or (select_tool_adapter(model) if model else None)
+    if is_bridge_adapter(resolved_adapter):
+        return inject_bridge_tool_prompt(
+            messages,
+            tools,
+            tool_choice,
+            adapter=resolved_adapter,
+            reasoning_config=reasoning_config,
+        )
     if is_deepseek_adapter(resolved_adapter) or (
         resolved_adapter is None and is_deepseek_model(model)
     ):
@@ -103,8 +115,13 @@ def inject_tool_prompt(
             adapter=resolved_adapter,
             reasoning_config=reasoning_config,
         )
-    if resolved_adapter == QWEN_3_5_ADAPTER:
-        return inject_qwen35_tool_prompt(messages, tools, tool_choice)
+    if resolved_adapter in (QWEN_3_5_ADAPTER, QWEN_3_8_ADAPTER):
+        return inject_qwen35_tool_prompt(
+            messages,
+            tools,
+            tool_choice,
+            adapter=resolved_adapter,
+        )
 
     tool_defs = format_tool_definitions(tools)
     tool_prompt = TOOL_SYSTEM_PROMPT.format(tool_definitions=tool_defs)
@@ -300,6 +317,14 @@ def extract_tool_calls(
     )
 
     resolved_adapter = adapter or (select_tool_adapter(model) if model else None)
+    if is_bridge_adapter(resolved_adapter):
+        bridge_tool_calls, bridge_remaining = extract_bridge_tool_calls(
+            cleaned,
+            tools=tools,
+            logger=logger,
+        )
+        if bridge_tool_calls:
+            return bridge_tool_calls, bridge_remaining
     if resolved_adapter == KIMI_K3_ADAPTER:
         kimi_tool_calls, kimi_remaining = extract_kimi_tool_calls(
             cleaned,
@@ -320,7 +345,7 @@ def extract_tool_calls(
         )
         if repaired_tool_calls:
             return repaired_tool_calls, repaired_remaining
-    if resolved_adapter == QWEN_3_5_ADAPTER:
+    if resolved_adapter in (QWEN_3_5_ADAPTER, QWEN_3_8_ADAPTER):
         qwen_tool_calls, qwen_remaining = extract_qwen35_tool_calls(
             cleaned,
             tools=tools,

@@ -26,8 +26,8 @@ _PARAMETER_PATTERN = re.compile(
 )
 
 
-def inject_qwen35_tool_prompt(messages, tools, tool_choice=None):
-    tool_prompt = _render_qwen35_tools_prompt(tools, tool_choice)
+def inject_qwen35_tool_prompt(messages, tools, tool_choice=None, adapter=None):
+    tool_prompt = _render_qwen35_tools_prompt(tools, tool_choice, adapter=adapter)
     new_messages = []
     has_system = False
     index = 0
@@ -130,10 +130,10 @@ def extract_qwen35_tool_calls(content, tools=None, logger=None):
     return calls, remaining or None
 
 
-def _render_qwen35_tools_prompt(tools, tool_choice=None):
+def _render_qwen35_tools_prompt(tools, tool_choice=None, adapter=None):
     from genai_proxy.token_usage import official_tool_prompt_for_adapter
 
-    prompt = official_tool_prompt_for_adapter(QWEN_3_5_ADAPTER, tools)
+    prompt = official_tool_prompt_for_adapter(adapter or QWEN_3_5_ADAPTER, tools)
     if prompt is None:
         return ""
     if tool_choice == "required":

@@ -21,6 +21,7 @@ from genai_proxy.chat.tool_protocol import extract_tool_calls
 from genai_proxy.chat.types import PreparedChatRequest
 from genai_proxy.errors import ProxyError
 from genai_proxy.models import (
+    BRIDGE_ADAPTERS,
     KIMI_FINAL_CLOSE,
     KIMI_FINAL_OPEN,
     KIMI_K3_ADAPTER,
@@ -33,6 +34,9 @@ from genai_proxy.models import (
 
 KIMI_TOOL_ATTEMPTS = 3
 REQUIRED_TOOL_ATTEMPTS = 3
+# Platform-hosted models follow the plain-text bridge only probabilistically on
+# long agent prompts, so give each client request a few upstream attempts.
+BRIDGE_TOOL_ATTEMPTS = 3
 
 
 class ToolLoopMixin:
@@ -112,10 +116,14 @@ class ToolLoopMixin:
         choice_satisfied = False
         final_response = False
         invalid_syntax = False
-        hold_attempt_reasoning = prepared.tool_adapter == KIMI_K3_ADAPTER and bool(
-            prepared.kimi_completed_actions
-        )
-        if prepared.tool_adapter == KIMI_K3_ADAPTER:
+        is_bridge = prepared.tool_adapter in BRIDGE_ADAPTERS
+        hold_attempt_reasoning = (
+            prepared.tool_adapter == KIMI_K3_ADAPTER
+            and bool(prepared.kimi_completed_actions)
+        ) or is_bridge
+        if is_bridge:
+            max_attempts = BRIDGE_TOOL_ATTEMPTS
+        elif prepared.tool_adapter == KIMI_K3_ADAPTER:
             max_attempts = KIMI_TOOL_ATTEMPTS
         elif _tool_choice_requires_call(prepared.tool_choice):
             max_attempts = REQUIRED_TOOL_ATTEMPTS
@@ -195,8 +203,21 @@ class ToolLoopMixin:
                 )
                 and attempt_index < max_attempts - 1
             )
+            # Bridge models silently drop native tool calls, so an empty
+            # response (or an explicitly required call) is retried instead of
+            # being surfaced as a final answer.
+            bridge_missing_call = (
+                is_bridge
+                and not tool_calls
+                and attempt_index < max_attempts - 1
+                and (
+                    _tool_choice_requires_call(prepared.tool_choice)
+                    or not content.strip()
+                )
+            )
             should_retry = (
                 invalid_syntax
+                or bridge_missing_call
                 or (
                     _tool_choice_requires_call(prepared.tool_choice)
                     and not choice_satisfied
@@ -241,6 +262,12 @@ class ToolLoopMixin:
                     ),
                 )
                 warning = "Kimi K3 did not produce a valid client response"
+            elif is_bridge:
+                attempt_messages = _bridge_tool_retry_messages(
+                    prepared.messages,
+                    prepared.tool_choice,
+                )
+                warning = "Upstream did not return a bridge action call"
             else:
                 attempt_messages = _required_tool_retry_messages(
                     prepared.messages,
@@ -268,6 +295,22 @@ class ToolLoopMixin:
                 },
                 finish_reason="tool_calls" if choice_satisfied else "stop",
             )
+
+        if (
+            is_bridge
+            and not choice_satisfied
+            and not sent_role
+            and attempt_reasoning_deltas
+        ):
+            # The attempts were held back for retrying; surface the last one so
+            # the client never receives an empty turn.
+            for reasoning_delta in attempt_reasoning_deltas:
+                delta = {"reasoning_content": reasoning_delta}
+                if not sent_role:
+                    delta["role"] = "assistant"
+                    sent_role = True
+                visible_reasoning += reasoning_delta
+                yield make_chunk(delta)
 
         if choice_satisfied:
             clean_remaining = _strip_visible_tool_syntax(
@@ -464,6 +507,40 @@ def _required_tool_retry_messages(messages: list[dict], tool_choice) -> list[dic
         "The previous response was discarded because it did not satisfy the "
         f"client's explicit tool_choice. {requirement} Use the tool-call format "
         "already defined in this conversation and do not answer in prose."
+    )
+
+    retried = [dict(message) for message in messages]
+    if retried and retried[-1].get("role") == "user":
+        content = retried[-1].get("content")
+        if isinstance(content, str):
+            retried[-1]["content"] = f"{content}\n\n{reminder}"
+        elif isinstance(content, list):
+            retried[-1]["content"] = [
+                *content,
+                {"type": "text", "text": f"\n\n{reminder}"},
+            ]
+        else:
+            retried[-1]["content"] = reminder
+        return retried
+    return [*retried, {"role": "user", "content": reminder}]
+
+
+def _bridge_tool_retry_messages(messages: list[dict], tool_choice) -> list[dict]:
+    if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
+        function = tool_choice.get("function")
+        name = function.get("name") if isinstance(function, dict) else None
+    else:
+        name = None
+    requirement = (
+        f"Call the action named {json.dumps(name, ensure_ascii=False)}."
+        if name
+        else "Call one of the available actions."
+    )
+    reminder = (
+        "Your previous response was discarded because it did not contain a "
+        f"CALLTOOL line. {requirement} Reply with a single "
+        'CALLTOOL {"name": "<action-name>", "arguments": {...}} line'
+        " (or RUNCMD <command> for the shell action) and nothing else."
     )
 
     retried = [dict(message) for message in messages]

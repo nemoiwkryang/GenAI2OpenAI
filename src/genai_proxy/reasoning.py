@@ -1,8 +1,11 @@
 from genai_proxy.errors import ProxyError
 from genai_proxy.models.registry import (
+    DEEPSEEK_V4_1_ADAPTER,
     DEEPSEEK_V4_ADAPTERS,
     GLM_5_2_ADAPTER,
+    GLM_5_3_ADAPTER,
     KIMI_K3_ADAPTER,
+    QWEN_3_8_ADAPTER,
 )
 
 OPENAI_REASONING_EFFORTS = (
@@ -84,12 +87,31 @@ def normalize_reasoning_for_adapter(
     if not effort:
         return reasoning_config
 
-    if adapter == GLM_5_2_ADAPTER:
-        # GenAI does not expose GLM-5.2's chat-template reasoning_effort
+    if adapter in (GLM_5_2_ADAPTER, GLM_5_3_ADAPTER):
+        # GenAI does not expose the GLM chat-template reasoning_effort
         # argument. The upstream template therefore always uses its official
         # default, max; injecting a second system directive would duplicate or
         # contradict that template-owned directive.
         return {"effort": "max"}
+    if adapter == DEEPSEEK_V4_1_ADAPTER:
+        # V4.1 reads a numeric 1-100 budget: low=50, high=75, max=100.
+        if effort == "none":
+            return {"effort": "none"}
+        if effort in ("minimal", "low"):
+            return {"effort": "low"}
+        if effort in ("medium", "high"):
+            return {"effort": "high"}
+        return {"effort": "max"}
+    if adapter == QWEN_3_8_ADAPTER:
+        # Qwen 3.8's template accepts only xhigh/medium/low and raises on
+        # anything else.
+        if effort == "none":
+            return {"effort": "none"}
+        if effort in ("minimal", "low"):
+            return {"effort": "low"}
+        if effort == "medium":
+            return {"effort": "medium"}
+        return {"effort": "xhigh"}
     if adapter in DEEPSEEK_V4_ADAPTERS:
         if effort == "none":
             return {"effort": "none"}

@@ -32,11 +32,18 @@ IMAGE_MAX_ASPECT_RATIO = 200
 
 
 def official_tool_prompt(function_tools: list[dict]) -> str:
+    return official_tool_prompt_for_spec(QWEN_3_5_SPEC, function_tools)
+
+
+def official_tool_prompt_for_spec(
+    spec: TokenizerSpec,
+    function_tools: list[dict],
+) -> str:
     serialized_tools = json.dumps(function_tools, ensure_ascii=False, sort_keys=True)
     sentinel = "__GENAI2OPENAI_SYSTEM_SENTINEL__"
     while sentinel in serialized_tools:
         sentinel += "_"
-    prompt = load_template(QWEN_3_5_SPEC).render(
+    prompt = load_template(spec).render(
         messages=[
             {"role": "system", "content": sentinel},
             {"role": "user", "content": "__GENAI2OPENAI_USER_SENTINEL__"},
@@ -55,7 +62,7 @@ def official_tool_prompt(function_tools: list[dict]) -> str:
         return prompt[start:end]
     except ValueError as exc:
         raise tokenizer_error(
-            QWEN_3_5_SPEC,
+            spec,
             "extract official tool prompt",
             exc,
         ) from exc
@@ -148,5 +155,6 @@ __all__ = [
     "QWEN_3_5_SPEC",
     "image_token_count",
     "official_tool_prompt",
+    "official_tool_prompt_for_spec",
     "serialize_completion",
 ]

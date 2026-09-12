@@ -54,6 +54,9 @@ class TokenizerSpec:
     tokenizer: Artifact
     template: Artifact | None = None
     encoder: Artifact | None = None
+    # Inline official template text for families whose template is vendored in
+    # the repository instead of downloaded. When set, no artifact is fetched.
+    template_source: str | None = None
 
 
 class ArtifactChecksumError(ValueError):
@@ -177,9 +180,12 @@ def load_template(spec: TokenizerSpec):
     with _runtime_lock:
         template = _templates.get(spec.family)
         if template is None:
-            if spec.template is None:
+            if spec.template is None and spec.template_source is None:
                 raise tokenizer_error(spec, "load missing chat template")
-            source = artifact_path(spec, spec.template).read_text(encoding="utf-8")
+            if spec.template_source is not None:
+                source = spec.template_source
+            else:
+                source = artifact_path(spec, spec.template).read_text(encoding="utf-8")
             environment = ImmutableSandboxedEnvironment(
                 trim_blocks=True,
                 lstrip_blocks=True,

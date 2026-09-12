@@ -103,12 +103,15 @@ def test_verify_active_assets_forces_offline_cache_access(monkeypatch):
     assert all(allow_download is False for _, allow_download in calls)
 
 
-def test_active_asset_manifest_comes_from_the_five_maintained_codecs():
+def test_active_asset_manifest_comes_from_the_maintained_codecs():
     assert tuple(spec.family for spec in ACTIVE_TOKENIZER_SPECS) == (
         "glm_5_2",
+        "glm_5_3",
         "deepseek_v4_flash",
         "deepseek_v4_pro",
+        "deepseek_v4_1",
         "qwen_3_5",
+        "qwen_3_8",
         "kimi_k3",
     )
     assert len(unique_artifacts()) == 8
@@ -133,7 +136,8 @@ def test_prefetch_downloads_unique_assets_and_loads_every_active_codec(monkeypat
 
     assert len(paths) == 8
     assert len(resolved) == 8
-    assert load_tokenizer.call_count == 5
-    assert load_template.call_count == 2
+    assert load_tokenizer.call_count == 8
+    # Inline-template families (glm_5_3, qwen_3_8) are compiled too.
+    assert load_template.call_count == 4
     assert load_encoder.call_count == 3
     load_tokenizer.assert_any_call(KIMI_K3_SPEC, factory=build_tokenizer)

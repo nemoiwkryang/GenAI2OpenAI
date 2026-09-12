@@ -3,7 +3,7 @@ import re
 import uuid
 from typing import Any
 
-from genai_proxy.models.registry import DEEPSEEK_V4_ADAPTERS
+from genai_proxy.models.registry import DEEPSEEK_V4_1_ADAPTER, DEEPSEEK_V4_ADAPTERS
 
 DEEPSEEK_LEGACY_TOOL_SYSTEM_TEMPLATE = """## Tools
 
@@ -28,6 +28,7 @@ Here are the functions available in JSONSchema format:
 """
 
 DEEPSEEK_REQUIRED_TOOL_SUFFIX = "\nFor this turn, a plain-text-only answer is invalid. You must emit a <｜DSML｜tool_calls> block."
+DEEPSEEK_V41_REQUIRED_TOOL_SUFFIX = "\nFor this turn, a plain-text-only answer is invalid. You must emit a <｜DSML｜ calls> block."
 DEEPSEEK_LEGACY_REQUIRED_TOOL_SUFFIX = "\nFor this turn, a plain-text-only answer is invalid. You must emit a <｜DSML｜function_calls> block."
 DEEPSEEK_NO_TOOL_SUFFIX = (
     "\nFor this turn, do not emit DSML tool_calls/function_calls or <tool_call> tags."
@@ -38,6 +39,15 @@ DSML_TOOL_CALLS_START = "<｜DSML｜tool_calls>"
 DSML_TOOL_CALLS_END = "</｜DSML｜tool_calls>"
 DSML_FUNCTION_CALLS_START = "<｜DSML｜function_calls>"
 DSML_FUNCTION_CALLS_END = "</｜DSML｜function_calls>"
+# DeepSeek V4.1 renamed the DSML tags to carry a leading space.
+DSML_V41_TOOL_CALLS_START = "<｜DSML｜ calls>"
+DSML_V41_TOOL_CALLS_END = "</｜DSML｜ calls>"
+DSML_BLOCK_NAMES = ("tool_calls", " calls", "function_calls", " function_calls")
+_INVOKE_PATTERN = r'<｜DSML｜\s?invoke name="(.*?)">(.*?)</｜DSML｜\s?invoke>'
+_PARAMETER_PATTERN = (
+    r'<｜DSML｜\s?parameter name="(.*?)" string="(true|false)">'
+    r"(.*?)</｜DSML｜\s?parameter>"
+)
 
 
 def is_deepseek_model(model: str | None) -> bool:
@@ -62,6 +72,7 @@ def inject_deepseek_tool_prompt(
             tool_choice_suffix=_deepseek_tool_choice_suffix(
                 tool_choice,
                 is_legacy=False,
+                adapter=adapter,
             ),
         )
 
@@ -147,7 +158,11 @@ def inject_deepseek_tool_prompt(
 
 def inject_deepseek_reasoning_prompt(messages, reasoning_config=None, adapter=None):
     effort = (reasoning_config or {}).get("effort")
-    if adapter not in DEEPSEEK_V4_ADAPTERS or effort != "max":
+    if adapter not in DEEPSEEK_V4_ADAPTERS or effort in (None, "none"):
+        return messages
+    # V4 only renders a directive for max; V4.1 renders a numeric budget for
+    # every thinking effort (high -> 75, max -> 100).
+    if adapter != DEEPSEEK_V4_1_ADAPTER and effort != "max":
         return messages
 
     from genai_proxy.token_usage import official_reasoning_prefix_for_adapter
@@ -234,15 +249,16 @@ def _render_deepseek_tools_prompt(tools, tool_choice=None, adapter=None):
     )
 
 
-def _deepseek_tool_choice_suffix(tool_choice, *, is_legacy: bool) -> str:
+def _deepseek_tool_choice_suffix(tool_choice, *, is_legacy: bool, adapter=None) -> str:
+    is_v41 = adapter == DEEPSEEK_V4_1_ADAPTER
     if tool_choice == "required":
-        return (
-            DEEPSEEK_LEGACY_REQUIRED_TOOL_SUFFIX
-            if is_legacy
-            else DEEPSEEK_REQUIRED_TOOL_SUFFIX
-        )
+        if is_legacy:
+            return DEEPSEEK_LEGACY_REQUIRED_TOOL_SUFFIX
+        if is_v41:
+            return DEEPSEEK_V41_REQUIRED_TOOL_SUFFIX
+        return DEEPSEEK_REQUIRED_TOOL_SUFFIX
     if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
-        block = "function_calls" if is_legacy else "tool_calls"
+        block = "function_calls" if is_legacy else (" calls" if is_v41 else "tool_calls")
         return (
             f"\nFor this turn, you must emit a <｜DSML｜{block}> block "
             f'using the tool "{tool_choice["function"]["name"]}".'
@@ -326,11 +342,7 @@ def _extract_dsml_tool_calls(content, logger=None, include_legacy=True):
         return None, content
 
     block = match.group(1)
-    invocations = re.findall(
-        r'<｜DSML｜invoke name="(.*?)">(.*?)</｜DSML｜invoke>',
-        block,
-        re.DOTALL,
-    )
+    invocations = re.findall(_INVOKE_PATTERN, block, re.DOTALL)
     if not invocations:
         return None, content
 
@@ -338,7 +350,7 @@ def _extract_dsml_tool_calls(content, logger=None, include_legacy=True):
     for tool_name, raw_params in invocations:
         arguments = {}
         for param_name, is_string, raw_value in re.findall(
-            r'<｜DSML｜parameter name="(.*?)" string="(true|false)">(.*?)</｜DSML｜parameter>',
+            _PARAMETER_PATTERN,
             raw_params,
             re.DOTALL,
         ):
@@ -365,10 +377,10 @@ def _extract_dsml_tool_calls(content, logger=None, include_legacy=True):
 
 
 def _find_dsml_tool_call_block(content: str, include_legacy=True):
-    pairs = [(DSML_TOOL_CALLS_START, DSML_TOOL_CALLS_END)]
-    if include_legacy:
-        pairs.append((DSML_FUNCTION_CALLS_START, DSML_FUNCTION_CALLS_END))
-    for start_tag, end_tag in pairs:
+    names = DSML_BLOCK_NAMES if include_legacy else DSML_BLOCK_NAMES[:2]
+    for name in names:
+        start_tag = f"<{DSML_TOKEN}{name}>"
+        end_tag = f"</{DSML_TOKEN}{name}>"
         match = re.search(
             rf"{re.escape(start_tag)}(.*?){re.escape(end_tag)}",
             content,
